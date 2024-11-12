@@ -52,6 +52,15 @@ constexpr struct timeval to_timeval(microseconds t) {
 	return timeval{ (long)secs.count(), (long)t.count() };
 }
 
+// Bytes per bit
+using bytes = std::ratio<8, 1>;
+
+template <typename ToRatio, typename FromRatio = std::ratio<1>, typename T>
+constexpr T unit_cast(T value) {
+	using conversion_ratio = std::ratio_divide<FromRatio, ToRatio>;
+	return value * static_cast<T>(conversion_ratio::num) / static_cast<T>(conversion_ratio::den);
+}
+
 constexpr float to_float(microseconds t) { return std::chrono::duration_cast<std::chrono::duration<float>>(t).count(); }
 
 struct UsageError : std::runtime_error {

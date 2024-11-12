@@ -152,6 +152,7 @@
     <ClCompile Include="Udp.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="checksum.h" />
     <ClInclude Include="Message.h" />
     <ClInclude Include="NetworkPackets.h" />
     <ClInclude Include="Packet.h" />

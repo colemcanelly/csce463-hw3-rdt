@@ -9,6 +9,7 @@
 
 #include "SenderSocket.h"
 #include "Message.h"
+#include "checksum.h"
 
 #define MAGIC_PORT 22345
 
@@ -45,7 +46,7 @@ int main(int argc, char* argv[]) try {
 
 	auto start = Time::now();
 
-	auto rdt = SenderSocket::open(argv[1], MAGIC_PORT, link);
+	auto rdt = SenderSocket::open(argv[1], MAGIC_PORT, link, window);
 
 	printf("Main:\tconnected to %s in %.3f sec, pkt size %llu bytes\n",
 		argv[1], to_float(time_elapsed<microseconds>(start)), SenderSocket::MAX_PKT_SIZE);
@@ -53,18 +54,23 @@ int main(int argc, char* argv[]) try {
 	start = Time::now();
 	
 	
-	for (size_t off = 0; off < message.size();)
+	for (size_t len, off = 0; off < message.size(); off += len)
 	{
-		size_t len = __min(message.size() + off, SenderSocket::MAX_PKT_SIZE - sizeof(net::SenderDataHeader));
-		rdt.send(message.data() + off, len);
-		off += len;
+		len = __min(message.size() - off, SenderSocket::MAX_PKT_SIZE - sizeof(net::SenderDataHeader));
+		rdt->send(message.data() + off, len);
 	}
 
 	float transfer_duration = to_float(time_elapsed<microseconds>(start));
-	rdt.close();
+	
+	auto crc = rdt->close();
+	if (crc != CRC32::checksum(message))
+		throw std::runtime_error("Checksum does not match!!\n");
 
-	printf("Main:\ttransfer finished in %.3f sec\n", transfer_duration);
+
+	printf("Main:\ttransfer finished in %.3f sec, %.2f Kbps, checksum %X\n", transfer_duration, (8 * message.size() / transfer_duration) / 1e3, crc);
+	printf("Main:\testRTT %.3f, ideal rate %.2f Kbps\n", rdt->estimated_rtt(), 8 * (SenderSocket::MAX_PKT_SIZE - sizeof(net::SenderDataHeader)) / (1e3 * rdt->estimated_rtt()));
 
 }
 catch (const SenderSocket::Error& e) { printf("Main:\t%s\n", e.what()); }
 catch (const UsageError& e) { printf("%s\n", e.what()); }
+catch (const std::runtime_error& e) { printf("%s\n", e.what()); }

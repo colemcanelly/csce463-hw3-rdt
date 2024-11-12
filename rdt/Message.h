@@ -15,8 +15,9 @@ class Message
 	const size_t len;
 	const std::byte* bytes;
 
-	Message(size_t _len) : len(_len << 2), bytes(new std::byte[_len << 2]) {
-		for (int i = 0; i < _len; i++) ((uint32_t*)bytes)[i] = i;
+	Message(uint64_t _len) : len(_len << 2), bytes(new std::byte[_len << 2]) {
+		DWORD* dword_buffer = ((DWORD*)bytes);
+		for (uint64_t i = 0; i < _len; i++) dword_buffer[i] = i;
 	}
 public:
 
