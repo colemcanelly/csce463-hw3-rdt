@@ -114,6 +114,7 @@
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -132,6 +133,7 @@
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <LanguageStandard>stdcpp20</LanguageStandard>
       <WholeProgramOptimization>false</WholeProgramOptimization>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -152,12 +154,14 @@
     <ClCompile Include="Udp.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="BoundedBuffer.h" />
     <ClInclude Include="checksum.h" />
     <ClInclude Include="Message.h" />
     <ClInclude Include="NetworkPackets.h" />
     <ClInclude Include="Packet.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="SenderSocket.h" />
+    <ClInclude Include="SenderSocketStats.h" />
     <ClInclude Include="Udp.h" />
     <ClInclude Include="WinSock.h" />
   </ItemGroup>

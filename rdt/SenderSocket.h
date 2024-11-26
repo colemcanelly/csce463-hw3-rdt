@@ -7,72 +7,108 @@
 
 #pragma once
 
+#include <future>
+
 #include "Udp.h"
+#include "SenderSocketStats.h"
 #include "Packet.h"
+
+#include "BoundedBuffer.h"
 
 
 class SenderSocket : Udp
 {
-	struct Stats {
-		std::atomic_uint64_t bytes_acked = { 0 };
-		std::atomic_uint32_t n_timeouts = {0};
-		std::atomic_uint32_t n_fast_retransmits = {0};
+
+	struct PacketMetadata {
+		Time::time_point time_sent;
+		Time::time_point timer_expire;
+		Packet pkt;
+
+		PacketMetadata() = default;
+		PacketMetadata(Packet&& p) : pkt(std::move(p)), time_sent(Time::now()), timer_expire(Time::now()) {}
+		
+		//PacketMetadata& operator=(PacketMetadata&&) = default;
 	};
 
-	// timing
-	microseconds rto;
-	microseconds dev_rtt;
-	microseconds est_rtt;
+	using Stats = socket_helpers::Stats;
+	using Timeouts = socket_helpers::Timeouts;
+	using PacketQueue = CircularBoundedBuffer<PacketMetadata>;
 
-	const Time::time_point socket_opened;
-	std::atomic_uint32_t window_size;
 
-	Stats stats;
+	const Time::time_point socket_opened;			// immutable (thread safe)
+	const uint32_t window_size;						// immutable (thread safe)
+
+	std::unique_ptr<Stats> stats;					// atomic stats		 (thread safe)
+	std::unique_ptr<Timeouts> timeouts;				// atomic timeouts	 (thread safe)
+	std::unique_ptr<PacketQueue> pending_packets;	// BoundedBuffer  (thread safe)
+	
 	std::jthread stats_thread;
+	std::jthread sender_thread;
+	std::jthread receiver_thread;
 
-	SenderSocket(const std::string& host_ip, const uint16_t port)
+	SenderSocket(const std::string& host_ip, const uint16_t port, uint32_t window, float rto)
 		: Udp(host_ip, port)
-		, rto(1s)
-		, dev_rtt(0s)
-		, est_rtt(0s)
 		, socket_opened(Time::now())
+		, window_size(window)
+		, stats(std::make_unique<Stats>())
+		, timeouts(std::make_unique<Timeouts>(rto))
+		, pending_packets(std::make_unique<PacketQueue>(window))
+		, sender_thread([this](std::stop_token st) { this->sender(st); })
+		, receiver_thread([this](std::stop_token st) { this->receiver(st); })
 		, stats_thread([this](std::stop_token st) { this->print_stats(st); })
 	{}
 
-
-
 public:
 	static constexpr size_t MAX_PKT_SIZE = (1500 - 28);
-	static constexpr size_t MAX_ATTEMPTS = 5;
-	//~SenderSocket() { this->close(); }
+	//static constexpr size_t MAX_PKT_SIZE = (9000 - 28);
+	static constexpr size_t MAX_ATTEMPTS = 50;
+	static constexpr microseconds STATS_FREQUENCY = 2s;
+
+	~SenderSocket() {
+		pending_packets->clear();
+		pending_packets->release(1); // unblock send
+
+		stats_thread.request_stop();
+		sender_thread.request_stop();
+		receiver_thread.request_stop();
+	}
 
 	static std::unique_ptr<SenderSocket> open(const std::string& host, const uint16_t port, const net::LinkProperties& link, uint32_t w) try {
 		static constexpr size_t MAX_SYN_ATTEMPTS = 3;
 
-		auto ss = std::unique_ptr<SenderSocket>(new SenderSocket(host, port));
-		ss->rto = std::chrono::duration_cast<microseconds>(std::chrono::duration<float>(__max(1, 2 * link.rtt)));
-		ss->window_size.store(w);
-		ss->attempt_send(Packet::syn_from(link), MAX_SYN_ATTEMPTS);
+		auto ss = std::unique_ptr<SenderSocket>(new SenderSocket(host, port, w, __max(1, 2 * link.rtt)));
+		ss->pending_packets->push(PacketMetadata(Packet::syn_from(link)));
 
 		return ss;
 	}
 	catch (const WinSock::Error& _) { throw InvalidName(); }
 
-	void send(const std::byte* ptr, size_t len) { this->attempt_send(Packet::data_from(ptr, len)); }
+	void send(const std::byte* ptr, size_t len) { this->pending_packets->push(PacketMetadata(Packet::data_from(ptr, len))); }
 
 	uint32_t close() {
 		stats_thread.request_stop();
-		auto ack = this->attempt_send(Packet::as_fin());
-		this->print_recv(ack);
-		return ack.get_window();
+		pending_packets->push(PacketMetadata(Packet::as_fin()));
+
+		sender_thread.request_stop();
+		receiver_thread.request_stop();
+
+		receiver_thread.get_id();
+		
+		sender_thread.join();
+		receiver_thread.join();
+
+		return this->stats->final_checksum.load();
 	}
 
-	void print_stats(std::stop_token st) const;
-	constexpr float estimated_rtt() const { return to_float(this->est_rtt); }
+	constexpr float estimated_rtt() const { return to_float(this->timeouts->est_rtt.load()); }
 
 	// +-+-+-+-+-+-+-+-+-+-+-+-+-+ Helper Methods +-+-+-+-+-+-+-+-+-+-+-+-+-+
 private:
-	net::ReceiverHeader attempt_send(const Packet& packet, const size_t attempts = MAX_ATTEMPTS);
+	void print_stats(std::stop_token st) const;
+	void sender(std::stop_token st);
+	void receiver(std::stop_token st);
+
+	//net::ReceiverHeader attempt_send(const Packet& packet, const size_t attempts = MAX_ATTEMPTS);
 
 	void print_send(const Packet& p, int i, size_t attempts) const;
 	void print_recv(const net::ReceiverHeader& ack) const;
@@ -96,28 +132,4 @@ public:
 	// (6) recvfrom() failed in kernel
 	struct FailedRecv : public SenderSocket::Error { explicit FailedRecv() : Error(6) {} };
 
-
-	friend class std::unique_ptr<SenderSocket>;
 };
-
-namespace Calc {
-	inline microseconds est_rtt(microseconds sample, microseconds curr_est, bool is_syn) {
-		if (is_syn) return sample;
-		constexpr float a = 0.125;
-		float est = (1 - a) * to_float(curr_est) + a * to_float(sample);
-		return std::chrono::duration_cast<microseconds>(std::chrono::duration<float>(est));
-	}
-
-	inline microseconds dev_rtt(microseconds sample, microseconds curr_dev, microseconds curr_est, bool is_syn) {
-		if (is_syn) return 0us;
-		constexpr float b = 0.125;
-		float dev = (1 - b) * to_float(curr_dev) + b * abs(to_float(sample) - to_float(curr_est));
-		return std::chrono::duration_cast<microseconds>(std::chrono::duration<float>(dev));
-	}
-
-	constexpr microseconds new_rto(microseconds sample, microseconds new_dev, microseconds new_est, bool is_syn) {
-		if (is_syn) return sample * 3;
-		return new_est + 4 * __max(10ms, new_dev);
-	}
-};
-

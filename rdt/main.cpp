@@ -8,8 +8,39 @@
 #include "pch.h"
 
 #include "SenderSocket.h"
-#include "Message.h"
+
+#include "BoundedBuffer.h"
 #include "checksum.h"
+#include "Message.h"
+
+
+
+/* CLI tests:
+* 
+* Part 2 (Window = 1)
+localhost 15 1 0.1 0.2 0 14
+* 
+* 
+* Part 3
+* 1.7
+localhost 20 10 0.1 0 0 1000
+
+* 1.8
+localhost 28 12000 0.1 0.0001 0 1000
+
+* 1.9
+localhost 20 10 0.01 0.1 0 1000
+
+* 1.10
+localhost 24 300 0.1 0.001 0 1000
+
+* 1.11
+localhost 15 10 0.01 0.5 0 14
+
+* 1.12
+localhost 30 3000 0.01 0 0 10000
+
+*/
 
 #define MAGIC_PORT 22345
 
@@ -36,7 +67,6 @@ std::tuple<int, int, net::LinkProperties> parse_args(char* argv[]) {
 }
 
 int main(int argc, char* argv[]) try {
-
 	if (argc != 8) throw UsageError();
 	auto [ power, window, link ] = parse_args(argv);
 
@@ -68,7 +98,7 @@ int main(int argc, char* argv[]) try {
 
 
 	printf("Main:\ttransfer finished in %.3f sec, %.2f Kbps, checksum %X\n", transfer_duration, (8 * message.size() / transfer_duration) / 1e3, crc);
-	printf("Main:\testRTT %.3f, ideal rate %.2f Kbps\n", rdt->estimated_rtt(), 8 * (SenderSocket::MAX_PKT_SIZE - sizeof(net::SenderDataHeader)) / (1e3 * rdt->estimated_rtt()));
+	printf("Main:\testRTT %.3f, ideal rate %.2f Kbps\n", rdt->estimated_rtt(), 8 * window * (SenderSocket::MAX_PKT_SIZE - sizeof(net::SenderDataHeader)) / (1e3 * rdt->estimated_rtt()));
 
 }
 catch (const SenderSocket::Error& e) { printf("Main:\t%s\n", e.what()); }

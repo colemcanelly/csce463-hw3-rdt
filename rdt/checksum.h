@@ -13,7 +13,6 @@
 #include "Message.h"
 
 
-
 namespace CRC32 {
 	namespace {
 		static inline constexpr uint32_t crc_part(uint32_t c) {

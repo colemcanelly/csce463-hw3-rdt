@@ -53,5 +53,11 @@
     <ClInclude Include="checksum.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="BoundedBuffer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SenderSocketStats.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

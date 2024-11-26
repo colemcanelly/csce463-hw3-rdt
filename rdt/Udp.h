@@ -15,17 +15,21 @@
 class Udp : WinSock
 {
 	SOCKET sock;
+	WSAEVENT data_in_socket;
 
 protected:
 	struct sockaddr_in server;
 
 public:
 	Udp(const std::string& host_ip, const uint16_t port);
-	~Udp() { closesocket(sock); }
+	~Udp() {
+		closesocket(sock);
+		WSACloseEvent(data_in_socket);
+	}
 
 
 	int udt_send(const Packet& p) const;
-	std::optional<net::ReceiverHeader> udt_recv(const struct timeval& timeout) const;
+	std::optional<net::ReceiverHeader> udt_recv(const std::optional<microseconds>& timeout, HANDLE event, bool& event_occurred) const;
 
 	struct Error : public std::runtime_error {
 		explicit Error() : std::runtime_error("") {}
@@ -38,6 +42,6 @@ public:
 
 private:
 
-	static constexpr size_t MAX_ATTEMPTS = 3;
+	friend class std::unique_ptr<Udp>;
 };
 

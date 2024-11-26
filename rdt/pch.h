@@ -39,13 +39,15 @@ using Time = std::chrono::high_resolution_clock;
 using seconds = std::chrono::seconds;
 using milliseconds = std::chrono::milliseconds;
 using microseconds = std::chrono::microseconds;
+using nanoseconds = std::chrono::nanoseconds;
 
 using namespace std::chrono_literals;
 
 template <typename T>
-constexpr T time_elapsed(Time::time_point begin) { return std::chrono::duration_cast<T>(Time::now() - begin); }
+constexpr T time_elapsed(Time::time_point begin, Time::time_point end = Time::now()) noexcept { return std::chrono::duration_cast<T>(end - begin); }
 
-constexpr struct timeval to_timeval(microseconds t) {
+constexpr float to_float(microseconds t) noexcept { return std::chrono::duration_cast<std::chrono::duration<float>>(t).count(); }
+constexpr struct timeval to_timeval(microseconds t) noexcept {
 	auto secs = std::chrono::duration_cast<seconds>(t);
 	t -= secs;
 
@@ -56,12 +58,11 @@ constexpr struct timeval to_timeval(microseconds t) {
 using bytes = std::ratio<8, 1>;
 
 template <typename ToRatio, typename FromRatio = std::ratio<1>, typename T>
-constexpr T unit_cast(T value) {
+constexpr T unit_cast(T value) noexcept {
 	using conversion_ratio = std::ratio_divide<FromRatio, ToRatio>;
 	return value * static_cast<T>(conversion_ratio::num) / static_cast<T>(conversion_ratio::den);
 }
 
-constexpr float to_float(microseconds t) { return std::chrono::duration_cast<std::chrono::duration<float>>(t).count(); }
 
 struct UsageError : std::runtime_error {
 	explicit UsageError() : std::runtime_error("Usage: rdt <hostname> <log_2(buffersize)> <Window Size> <RTT> <Forward loss> <Reverse Loss> <Link Speed>\n") {}

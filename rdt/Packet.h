@@ -11,16 +11,36 @@
 
 class Packet
 {
-	const size_t len;
-	const std::byte* bytes;
+	size_t len;
+	std::byte* bytes;
 
-
-	Packet(size_t _len) : len(_len), bytes(new std::byte[_len](std::byte{0})) {}
+	Packet(size_t _len) : len(_len), bytes(new std::byte[_len](std::byte{ 0 })) {}
 	Packet(size_t _len, void* data) : len(_len), bytes((std::byte*)data) { data = nullptr; }
 
 public:
-	~Packet() { delete[] bytes; }
+	Packet(Packet&) = delete;
+	Packet() : len(0), bytes(nullptr) {}
+	
+	Packet(Packet&& other) noexcept : len(other.len), bytes(other.bytes) {
+		other.len = 0;
+		other.bytes = nullptr;
+	}
+	
+	~Packet() { if (bytes) delete[] bytes; bytes = nullptr; }
+
+	Packet& operator=(Packet&& other) noexcept {
+		if (this != &other) {
+			bytes = other.bytes;
+			len = other.len;
+
+			other.bytes = nullptr;
+			other.len = 0;
+		}
+		return *this;
+	}
+
 	inline static std::atomic_uint32_t seq = 0;
+
 
 	constexpr const std::byte* data() const { return bytes; }
 	constexpr const size_t size() const { return len; }
@@ -34,10 +54,17 @@ public:
 			&& ack.flags.SYN == head->flags.SYN
 			&& ack.flags.FIN == head->flags.FIN;
 	}
-	inline const bool ack_seq_correct(const uint32_t ack_seq) const {
-		return (is_syn() || is_fin())
-			? ack_seq == get_seq()		// SYN | FIN
-			: ack_seq == get_seq() + 1;	// Data
+
+	enum class MatchAck { RandomACK, DuplicateACK, SynACK, FinACK, DataACK };
+
+	inline const MatchAck ack_matches(const net::ReceiverHeader ack) const {
+		if (ack.get_seq() == get_seq()) {
+			if (is_syn() && ack.is_syn_ack()) return MatchAck::SynACK;
+			if (is_fin() && ack.is_fin_ack()) return MatchAck::FinACK;
+			else return MatchAck::DuplicateACK;
+		}
+		if (ack.get_seq() > get_seq()) return MatchAck::DataACK;
+		return MatchAck::RandomACK;
 	}
 
 	static Packet syn_from(const net::LinkProperties& _link) {
