@@ -24,7 +24,7 @@ speed to $S = 1 Gbps$. Examine how your goodput scales with window size $W$. Thi
 be done by plotting the steady-state rate $r(W)$ for $W = 1, 2, 4, 8, …, 2^{10}$ and keeping the $x$ axis on a log-scale. Your peak rate will be around $24 Mbps$ and, depending on your home bandwidth, usage of an on-campus server might be necessary. Using curve-fitting, gener
 ate a model for $r(W)$. Discuss whether it matches the theory discussed in class.  
 
-![Goodput vs Window Size](report/q1-goodput-vs-wnd.png)
+![Goodput vs Window Size](./report/q1-goodput-vs-wnd.png)
 
 - This matches the principles we learned in class. Due to there being no packed loss, and the RTT being a little higher than average, we can expect that the goodput will scale with the window sizes exponential growth.
 
@@ -39,7 +39,7 @@ actual $RTT$ may deviate from the requested $RTT$. Thus, use the measured averag
 your plots and comment on whether the resulting curve matches theory.
 
 
-![Goodput vs RTT](report/q2-goodput-vs-rtt.png)
+![Goodput vs RTT](./report/q2-goodput-vs-rtt.png)
 
 - This is exactly what we expect to see in a situation like this in theory. When the estimated delay increases, the amount of packets that are able to move through the socket are significantly reduced (throughput goes down). Numerous outside parameters could cause the measured $RTT$ to increase.
 
