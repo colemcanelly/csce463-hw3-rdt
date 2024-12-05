@@ -13,7 +13,7 @@
 #ifdef DEBUG
 #define LOG(print_fn) print_fn
 #else
-#define LOG(print_fn)
+#define LOG(print_fn) {}
 #endif
 
 
@@ -21,14 +21,16 @@
 void SenderSocket::sender(std::stop_token st) {
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
 
-	auto it = pending_packets->iter();
-	while (!st.stop_requested() || it.has_next())
+	while (!st.stop_requested() || !send_queue->empty())
 	{
-		auto next_unsent = it.next_mut();
-		this->udt_send(next_unsent->pkt);
-		next_unsent->time_sent = Time::now();
-		next_unsent->timer_expire = Time::now() + timeouts->rto.load();
-		LOG(print_send(next_unsent->pkt, 1, MAX_ATTEMPTS));
+		Packet p = send_queue->pop();
+		
+		this->udt_send(p);
+		LOG(print_send(p, 1, MAX_ATTEMPTS));
+		
+		bool empty_queue = recv_queue->empty();
+		recv_queue->push(PacketMetadata(std::move(p)));
+		if (empty_queue) ReleaseSemaphore(this->sent_data_event, 1, NULL);
 	}
 	LOG(printf("Sender Done\n"));
 }
@@ -45,11 +47,13 @@ void SenderSocket::receiver(std::stop_token st) try {
 	auto retx = [this, &n_retx, &dup_ack, &base_timer_expire]() {
 		if (++n_retx >= MAX_ATTEMPTS) throw SenderSocket::Timeout();
 
-		auto base = pending_packets->peek_mut();
-		this->udt_send(base->pkt);
-		base->time_sent = Time::now();
+		auto& base = recv_queue->peek_mut();
+
+		this->udt_send(base.pkt);
+		LOG(print_send(base.pkt, n_retx + 1, MAX_ATTEMPTS));
+		
+		base.time_sent = Time::now();
 		base_timer_expire = Time::now() + timeouts->rto.load();
-		LOG(print_send(base->pkt, n_retx + 1, MAX_ATTEMPTS));
 	};
 
 
@@ -58,17 +62,18 @@ void SenderSocket::receiver(std::stop_token st) try {
 	size_t last_released = 0;
 	size_t eff_window = 0;
 
-	while (!st.stop_requested() || !pending_packets->empty())
+	while (!st.stop_requested() || !recv_queue->empty())
 	{
 		std::optional<microseconds> timeout = {};
-		if (!pending_packets->empty()) {
+		if (!recv_queue->empty()) {
 			timeout = std::chrono::duration_cast<microseconds>(base_timer_expire - Time::now());
 			LOG(printf("New Timeout: %.3f Sec\n", to_float(timeout.value())));
 		}
 		else LOG(printf("Waiting Infinitely\n"));
 
 		bool not_timeout = false;
-		auto res = this->udt_recv(timeout, pending_packets->not_empty_smph(), not_timeout);
+		auto res = this->udt_recv(timeout, this->sent_data_event, not_timeout);
+		if (recv_queue->empty()) continue;
 		if (!res && not_timeout) continue;	// not_empty_smph changed
 		if (!res) {							// timeout
 			stats->n_timeouts++;
@@ -79,44 +84,47 @@ void SenderSocket::receiver(std::stop_token st) try {
 		net::ReceiverHeader ack = res.value();
 		uint64_t bytes_acked = 0;
 
-		switch (pending_packets->peek().pkt.ack_matches(ack))
+		switch (recv_queue->peek().pkt.ack_matches(ack))
 		{
 		case Packet::MatchAck::SynACK:
 			LOG(print_recv(ack));
-			timeouts->recalculate_syn(time_elapsed<microseconds>(pending_packets->peek().time_sent));
-			bytes_acked += pending_packets->pop().pkt.size();
-			last_released = __min(this->window_size, ack.get_window());
-			pending_packets->release(last_released);
+			timeouts->recalculate_syn(time_elapsed<microseconds>(recv_queue->peek().time_sent));
+			bytes_acked += recv_queue->pop_release().pkt.size();
+			last_released = std::min(this->window_size, ack.get_window());
+			send_queue->release_space(last_released);
 			break;
 		case Packet::MatchAck::DataACK: {
 			LOG(print_recv(ack));
 			size_t advance = ack.get_seq() - send_base;
 
-			if (n_retx == 0)
-				timeouts->recalculate(time_elapsed<microseconds>(pending_packets->at(advance - 1).time_sent));
-			
-			bytes_acked += pending_packets->fold_remove_n<uint64_t>(
+			auto&& [ last_acked, bytes ] = recv_queue->fold_pop_n<uint64_t>(
 				advance,
 				[](const auto& p, uint64_t byts) { return byts + p.pkt.size(); }
 			);
+			bytes_acked += bytes;
+
+			if (n_retx == 0)
+				timeouts->recalculate(time_elapsed<microseconds>(last_acked.time_sent));
 
 			send_base = ack.get_seq();
 
-			eff_window = __min(this->window_size, ack.get_window());
+			eff_window = std::min(this->window_size, ack.get_window());
 			size_t release = send_base + eff_window - last_released;
-			pending_packets->release(release);
+			send_queue->release_space(release);
 			stats->effective_window.store(eff_window);
 			last_released += release;
 			break;
 		}
-		case Packet::MatchAck::FinACK:
+		case Packet::MatchAck::FinACK: {
 			print_recv(ack);
 			stats->final_checksum.store(ack.get_window());
-			bytes_acked += pending_packets->fold_remove_n<uint64_t>(
-				pending_packets->size(),
+			auto&& [_, bytes] = recv_queue->fold_pop_n<uint64_t>(
+				recv_queue->size(),
 				[](const auto& p, uint64_t byts) { return byts + p.pkt.size(); }
 			);
+			bytes_acked += bytes;
 			break;
+		}
 		case Packet::MatchAck::DuplicateACK:
 			if (++dup_ack == 3) {						// fast retransmit
 				stats->n_fast_retransmits++;

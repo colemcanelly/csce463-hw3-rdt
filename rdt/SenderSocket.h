@@ -13,7 +13,7 @@
 #include "SenderSocketStats.h"
 #include "Packet.h"
 
-#include "BoundedBuffer.h"
+#include "RingBuffer.h"
 
 
 class SenderSocket : Udp
@@ -21,27 +21,27 @@ class SenderSocket : Udp
 
 	struct PacketMetadata {
 		Time::time_point time_sent;
-		Time::time_point timer_expire;
 		Packet pkt;
 
 		PacketMetadata() = default;
-		PacketMetadata(Packet&& p) : pkt(std::move(p)), time_sent(Time::now()), timer_expire(Time::now()) {}
-		
-		//PacketMetadata& operator=(PacketMetadata&&) = default;
+		PacketMetadata(Packet&& p) : pkt(std::move(p)), time_sent(Time::now()) {}
 	};
 
 	using Stats = socket_helpers::Stats;
 	using Timeouts = socket_helpers::Timeouts;
-	using PacketQueue = CircularBoundedBuffer<PacketMetadata>;
 
 
-	const Time::time_point socket_opened;			// immutable (thread safe)
-	const uint32_t window_size;						// immutable (thread safe)
+	const Time::time_point socket_opened;					// immutable (thread safe)
+	const uint32_t window_size;								// immutable (thread safe)
 
-	std::unique_ptr<Stats> stats;					// atomic stats		 (thread safe)
-	std::unique_ptr<Timeouts> timeouts;				// atomic timeouts	 (thread safe)
-	std::unique_ptr<PacketQueue> pending_packets;	// BoundedBuffer  (thread safe)
-	
+	std::unique_ptr<Stats> stats;							// atomic stats		 (thread safe)
+	std::unique_ptr<Timeouts> timeouts;						// atomic timeouts	 (thread safe)
+
+	std::unique_ptr<RingBuffer<Packet>> send_queue;			// RingBuffer  (thread safe)
+	std::unique_ptr<RingBuffer<PacketMetadata>> recv_queue;	// RingBuffer  (thread safe)
+
+	HANDLE sent_data_event;
+
 	std::jthread stats_thread;
 	std::jthread sender_thread;
 	std::jthread receiver_thread;
@@ -52,7 +52,9 @@ class SenderSocket : Udp
 		, window_size(window)
 		, stats(std::make_unique<Stats>())
 		, timeouts(std::make_unique<Timeouts>(rto))
-		, pending_packets(std::make_unique<PacketQueue>(window))
+		, sent_data_event(CreateSemaphore(NULL, 0, 1, NULL))
+		, send_queue(std::make_unique<RingBuffer<Packet>>(window, 1))
+		, recv_queue(std::make_unique<RingBuffer<PacketMetadata>>(window))
 		, sender_thread([this](std::stop_token st) { this->sender(st); })
 		, receiver_thread([this](std::stop_token st) { this->receiver(st); })
 		, stats_thread([this](std::stop_token st) { this->print_stats(st); })
@@ -65,35 +67,35 @@ public:
 	static constexpr microseconds STATS_FREQUENCY = 2s;
 
 	~SenderSocket() {
-		pending_packets->clear();
-		pending_packets->release(1); // unblock send
-
 		stats_thread.request_stop();
 		sender_thread.request_stop();
 		receiver_thread.request_stop();
+		
+		send_queue->clear();
+		send_queue->release_space(); // unblock send
+
+		CloseHandle(sent_data_event);
 	}
 
 	static std::unique_ptr<SenderSocket> open(const std::string& host, const uint16_t port, const net::LinkProperties& link, uint32_t w) try {
 		static constexpr size_t MAX_SYN_ATTEMPTS = 3;
 
 		auto ss = std::unique_ptr<SenderSocket>(new SenderSocket(host, port, w, __max(1, 2 * link.rtt)));
-		ss->pending_packets->push(PacketMetadata(Packet::syn_from(link)));
+		ss->send_queue->push(Packet::syn_from(link));
 
 		return ss;
 	}
 	catch (const WinSock::Error& _) { throw InvalidName(); }
 
-	void send(const std::byte* ptr, size_t len) { this->pending_packets->push(PacketMetadata(Packet::data_from(ptr, len))); }
+	void send(const std::byte* ptr, size_t len) { this->send_queue->push(Packet::data_from(ptr, len)); }
 
 	uint32_t close() {
 		stats_thread.request_stop();
-		pending_packets->push(PacketMetadata(Packet::as_fin()));
+		send_queue->push(Packet::as_fin());
 
 		sender_thread.request_stop();
 		receiver_thread.request_stop();
 
-		receiver_thread.get_id();
-		
 		sender_thread.join();
 		receiver_thread.join();
 

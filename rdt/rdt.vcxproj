@@ -154,12 +154,12 @@
     <ClCompile Include="Udp.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="BoundedBuffer.h" />
     <ClInclude Include="checksum.h" />
     <ClInclude Include="Message.h" />
     <ClInclude Include="NetworkPackets.h" />
     <ClInclude Include="Packet.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="RingBuffer.h" />
     <ClInclude Include="SenderSocket.h" />
     <ClInclude Include="SenderSocketStats.h" />
     <ClInclude Include="Udp.h" />

@@ -63,7 +63,11 @@ public:
 			if (is_fin() && ack.is_fin_ack()) return MatchAck::FinACK;
 			else return MatchAck::DuplicateACK;
 		}
-		if (ack.get_seq() > get_seq()) return MatchAck::DataACK;
+		if (ack.get_seq() > get_seq()) {
+			if (ack.is_syn_ack()) return MatchAck::SynACK;
+			if (ack.is_fin_ack()) return MatchAck::FinACK;
+			else return MatchAck::DataACK;
+		}
 		return MatchAck::RandomACK;
 	}
 
